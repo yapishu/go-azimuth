@@ -52,6 +52,21 @@ func (p AzimuthNumber) Rank() AzimuthRank {
 	}
 }
 
+func dominionToString(code int) string {
+	switch code {
+	case 1:
+		return "l1"
+	case 2:
+		return "l2"
+	case 3:
+		return "spawn"
+	default:
+		return fmt.Sprintf("l%d", code)
+	}
+}
+
+const zeroAddressLiteral = "X'0000000000000000000000000000000000000000'"
+
 type Point struct {
 	Number AzimuthNumber `db:"azimuth_number"`
 
@@ -82,6 +97,74 @@ type Point struct {
 	EscapeRequestedTo AzimuthNumber `db:"escape_requested_to" json:""`
 }
 
+var derivedSponsorCondition = fmt.Sprintf(`
+		p.has_sponsor = 0
+		AND p.sponsor = 0
+		AND p.azimuth_number > 0xff
+		AND NOT EXISTS (
+		    SELECT 1
+		      FROM diffs d
+		     WHERE d.azimuth_number = p.azimuth_number
+		       AND d.operation = %d
+		)`, DIFF_LOST_SPONSOR)
+
+var derivedSpawnCondition = fmt.Sprintf(`
+		p.spawn_address = %s
+		AND EXISTS (
+		    SELECT 1
+		      FROM diffs d
+		     WHERE d.azimuth_number = p.azimuth_number
+		       AND d.operation = %d
+		       AND d.data != %s
+		)`, zeroAddressLiteral, DIFF_CHANGED_SPAWN_PROXY, zeroAddressLiteral)
+
+var basePointSelect = fmt.Sprintf(`
+	select
+	       p.azimuth_number,
+	       p.owner_address,
+	       p.owner_nonce,
+	       case
+	           when %[2]s then (
+	               select d.data
+	                 from diffs d
+	                where d.azimuth_number = p.azimuth_number
+	                  and d.operation = %[3]d
+	                  and d.data != %[4]s
+	             order by d.rowid desc
+	                limit 1
+	           )
+	           else p.spawn_address
+	       end as spawn_address,
+	       p.spawn_nonce,
+	       p.management_address,
+	       p.management_nonce,
+	       p.voting_address,
+	       p.voting_nonce,
+	       p.transfer_address,
+	       p.transfer_nonce,
+	       p.dominion,
+	       p.is_active,
+	       p.life,
+	       p.rift,
+	       p.crypto_suite_version,
+	       p.auth_key,
+	       p.encryption_key,
+	       case
+	           when %[1]s then 1
+	           else p.has_sponsor
+	       end as has_sponsor,
+	       case
+	           when %[1]s then
+	               case
+	                   when p.azimuth_number > 0xffff then p.azimuth_number & 0xffff
+	                   else p.azimuth_number & 0xff
+	               end
+	           else p.sponsor
+	       end as sponsor,
+	       p.is_escape_requested,
+	       p.escape_requested_to
+	  from points p`, derivedSponsorCondition, derivedSpawnCondition, DIFF_CHANGED_SPAWN_PROXY, zeroAddressLiteral)
+
 func (p Point) MarshalJSON() ([]byte, error) {
 	type Alias Point
 
@@ -102,7 +185,8 @@ func (p Point) MarshalJSON() ([]byte, error) {
 
 func (db DB) GetPoint(azimuth_number AzimuthNumber) (Point, bool) {
 	var ret Point
-	err := db.DB.Get(&ret, `select * from points where azimuth_number = ?`, azimuth_number)
+	query := basePointSelect + ` where p.azimuth_number = ?`
+	err := db.DB.Get(&ret, query, azimuth_number)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Point{}, false
 	} else if err != nil {
@@ -113,7 +197,7 @@ func (db DB) GetPoint(azimuth_number AzimuthNumber) (Point, bool) {
 
 func (db DB) GetPoints() ([]Point, bool) {
 	var ret []Point
-	err := db.DB.Select(&ret, `select * from points`)
+	err := db.DB.Select(&ret, basePointSelect)
 	if errors.Is(err, sql.ErrNoRows) {
 		return []Point{}, false
 	} else if err != nil {
@@ -181,8 +265,9 @@ func DiffDBPointWithRemote(dbp Point, rp perigee.Point) []string {
 	diffs := []string{}
 
 	// Dominion: db int vs API string
-	if fmt.Sprintf("l%v", dbp.Dominion) != rp.Dominion {
-		diffs = append(diffs, fmt.Sprintf("dominion: db=%d api=%d", dbp.Dominion, rp.Dominion))
+	dbDominion := dominionToString(dbp.Dominion)
+	if !strings.EqualFold(dbDominion, rp.Dominion) {
+		diffs = append(diffs, fmt.Sprintf("dominion: db=%s api=%s", dbDominion, rp.Dominion))
 	}
 
 	// Owner address

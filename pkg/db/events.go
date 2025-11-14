@@ -217,7 +217,15 @@ func (e EthereumEventLog) Effects() (Query, []AzimuthDiff) {
 		p := Point{
 			Number: topic_to_azimuth_number(e.Topic2),
 		}
-		return Query{`insert into points (azimuth_number) values (:azimuth_number)`, p},
+		if p.Number.Rank() != GALAXY {
+			// All non-galaxy points have a natural parent, so record it immediately so that
+			// inactive ships still report their sponsor correctly.
+			p.HasSponsor = true
+			p.Sponsor = topic_to_azimuth_number(e.Topic1)
+		}
+		return Query{`
+			insert into points (azimuth_number, has_sponsor, sponsor)
+			            values (:azimuth_number, :has_sponsor, :sponsor)`, p},
 			[]AzimuthDiff{{SourceEventLogID: e.ID, IntraLogIndex: 0, AzimuthNumber: p.Number, Operation: DIFF_SPAWNED}}
 
 	case ACTIVATED:
@@ -284,9 +292,17 @@ func (e EthereumEventLog) Effects() (Query, []AzimuthDiff) {
 				}}
 		}
 	case CHANGED_SPAWN_PROXY:
+		addr := topic_to_eth_address(e.Topic2)
+		if (addr == common.Address{}) {
+			// Ignore zero-address updates. When a ship migrates to L2, Azimuth clears
+			// the spawn proxy on L1, but the operative spawn proxy lives on L2.
+			// Roller continues reporting the L2 value, so mimic that here to avoid
+			// wiping out valid L2 state.
+			return Query{}, []AzimuthDiff{}
+		}
 		p := Point{
 			Number:       topic_to_azimuth_number(e.Topic1),
-			SpawnAddress: topic_to_eth_address(e.Topic2),
+			SpawnAddress: addr,
 		}
 		if p.Number <= 0xffff && p.SpawnAddress == L2_DEPOSIT_ADDRESS {
 			// Setting spawn proxy to the L2 deposit address represents migrating to the "Spawn"
