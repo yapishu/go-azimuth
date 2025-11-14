@@ -14,6 +14,8 @@ import (
 	"github.com/Native-Planet/perigee/roller"
 	perigee "github.com/Native-Planet/perigee/types"
 	"github.com/ethereum/go-ethereum/common"
+
+	"go-azimuth/pkg/phonemes"
 )
 
 type AzimuthRank uint
@@ -261,7 +263,53 @@ func decodeRollerHexKey(s string) ([]byte, error) {
 	return hex.DecodeString(s)
 }
 
-func DiffDBPointWithRemote(dbp Point, rp perigee.Point) []string {
+type rawNetworkEscape struct {
+	Network struct {
+		Escape json.RawMessage `json:"escape"`
+	} `json:"network"`
+}
+
+func parseEscapeTarget(data []byte) (bool, AzimuthNumber, error) {
+	var raw rawNetworkEscape
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return false, 0, fmt.Errorf("unmarshal escape: %w", err)
+	}
+	return parseEscapeShip(raw.Network.Escape)
+}
+
+func parseEscapeShip(raw json.RawMessage) (bool, AzimuthNumber, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return false, 0, nil
+	}
+
+	var str string
+	if err := json.Unmarshal(trimmed, &str); err == nil {
+		if str == "" {
+			return false, 0, nil
+		}
+		if strings.HasPrefix(str, "~") {
+			num, ok := phonemes.PhonemeToInt(str)
+			if !ok {
+				return false, 0, fmt.Errorf("invalid escape ship %q", str)
+			}
+			return true, AzimuthNumber(num), nil
+		}
+		if asUint, err := strconv.ParseUint(str, 10, 32); err == nil {
+			return true, AzimuthNumber(asUint), nil
+		}
+		return false, 0, fmt.Errorf("invalid escape ship string %q", str)
+	}
+
+	var num uint32
+	if err := json.Unmarshal(trimmed, &num); err == nil {
+		return true, AzimuthNumber(num), nil
+	}
+
+	return false, 0, fmt.Errorf("unsupported escape encoding: %s", string(trimmed))
+}
+
+func DiffDBPointWithRemote(dbp Point, rp perigee.Point, escapeRequested bool, escapeTarget AzimuthNumber) []string {
 	diffs := []string{}
 
 	// Dominion: db int vs API string
@@ -375,7 +423,15 @@ func DiffDBPointWithRemote(dbp Point, rp perigee.Point) []string {
 		}
 	}
 
-	// TODO: escape requests
+	// Escape requests
+	if dbp.IsEscapeRequested != escapeRequested {
+		diffs = append(diffs, fmt.Sprintf("isEscapeRequested: db=%v api=%v",
+			dbp.IsEscapeRequested, escapeRequested))
+	}
+	if escapeRequested && dbp.EscapeRequestedTo != escapeTarget {
+		diffs = append(diffs, fmt.Sprintf("escapeRequestedTo: db=%d api=%d",
+			dbp.EscapeRequestedTo, escapeTarget))
+	}
 	return diffs
 }
 
@@ -401,7 +457,12 @@ func (db DB) CheckPointsAgainstRoller(ctx context.Context) error {
 			return fmt.Errorf("unmarshal into perigee.Point %d: %w", p.Number, err)
 		}
 
-		diffs := DiffDBPointWithRemote(p, rp)
+		escapeRequested, escapeTarget, err := parseEscapeTarget(data)
+		if err != nil {
+			return fmt.Errorf("parse escape target %d: %w", p.Number, err)
+		}
+
+		diffs := DiffDBPointWithRemote(p, rp, escapeRequested, escapeTarget)
 		if len(diffs) > 0 {
 			fmt.Printf("point %d mismatches:\n", p.Number)
 			for _, d := range diffs {
