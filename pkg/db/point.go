@@ -28,8 +28,6 @@ const (
 
 type AzimuthNumber uint32
 
-var client *roller.Roller
-
 // Get the natural parent of an Azimuth point.
 func (p AzimuthNumber) Parent() AzimuthNumber {
 	if p > 0xffff {
@@ -292,8 +290,7 @@ func DiffDBPointWithRemote(dbp Point, rp perigee.Point) []string {
 		}
 	}
 
-	// Wire in IsEscapeRequested/EscapeRequestedTo once you know where that lives in the remote JSON.
-
+	// TODO: escape requests
 	return diffs
 }
 
@@ -305,19 +302,10 @@ func (db DB) CheckPointsAgainstRoller(ctx context.Context) error {
 	}
 
 	for _, p := range points {
-		// Roller expects something like ship number or patp;
-		// here I assume the numeric ship number is fine.
 		remote, err := roller.Client.GetPoint(ctx, int(p.Number))
 		if err != nil {
 			return fmt.Errorf("roller GetPoint(%d): %w", p.Number, err)
 		}
-
-		// If types.Point matches your perigee.Point struct, you can:
-		//   var rp perigee.Point
-		//   // map fields from remote to rp
-		// or just adjust DiffDBPointWithRemote to accept *types.Point.
-
-		// Example assuming remote is JSON-compatible with perigee.Point:
 		data, err := json.Marshal(remote)
 		if err != nil {
 			return fmt.Errorf("marshal remote point %d: %w", p.Number, err)
