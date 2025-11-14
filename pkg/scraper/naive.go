@@ -107,7 +107,7 @@ func GetNaiveTransactionData(client *ethclient.Client, db DB, logs []EthereumEve
 	}
 
 	// Construct batches
-	const MAX_BATCH_SIZE = 20
+	const MAX_BATCH_SIZE = 5
 	for i := 0; i < len(logs); i += MAX_BATCH_SIZE {
 		// Compute batch set upper-bound
 		ii := i + MAX_BATCH_SIZE

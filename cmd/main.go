@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -73,6 +74,8 @@ func main() {
 		query(args[1])
 	case "show_logs":
 		show_logs(args[1])
+	case "diff_roller":
+		diff_roller()
 	case "checkpoint":
 		if len(args) < 2 {
 			panic("Gotta provide a path to checkpoint into")
@@ -120,6 +123,17 @@ func play_logs() {
 	db.PlayAzimuthLogs()
 	fmt.Println("Playing naive logs")
 	db.PlayNaiveLogs()
+}
+
+func diff_roller() {
+	ctx := context.Background()
+	db := get_db(DB_PATH)
+	fmt.Println("Diffing roller state")
+	fmt.Println("set ROLLER_URL env var to use a custom roller")
+	if err := db.CheckPointsAgainstRoller(ctx); err != nil {
+		fmt.Println(err)
+	}
+
 }
 
 func query(urbit_id string) {
